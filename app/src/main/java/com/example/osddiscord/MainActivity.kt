@@ -128,9 +128,9 @@ class MainActivity : AppCompatActivity() {
             } else {
                 startService(intent)
             }
-        } else {
-            handler.post(monitorRunnable)
         }
+        // Always run the local monitoring loop to update the UI while the app is open
+        handler.post(monitorRunnable)
     }
 
     private fun stopMonitoring() {
@@ -144,8 +144,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateUI(active: Boolean) {
         if (active) {
-            tvStatus.text = "Status: Active & Monitoring..."
-            tvStatus.setTextColor(android.graphics.Color.parseColor("#4CAF50"))
+            tvStatus.text = "Status: Connecting to OSD..."
+            tvStatus.setTextColor(android.graphics.Color.parseColor("#FFA500")) // Orange while connecting
             btnToggleMonitoring.text = "Stop Monitoring"
             btnToggleMonitoring.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#F44336")))
         } else {
@@ -172,8 +172,10 @@ class MainActivity : AppCompatActivity() {
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 runOnUiThread {
-                    tvStatus.text = "Status: Error connecting to local OSD"
-                    tvStatus.setTextColor(android.graphics.Color.RED)
+                    if (isMonitoring) {
+                        tvStatus.text = "Status: OSD Not Found (Is it running?)"
+                        tvStatus.setTextColor(android.graphics.Color.RED)
+                    }
                 }
             }
             override fun onResponse(call: Call, response: Response) {
@@ -182,13 +184,18 @@ class MainActivity : AppCompatActivity() {
                         val json = JSONObject(responseBody)
                         val currentState = json.optInt("alarmState", 0)
                         val currentTime = System.currentTimeMillis()
-                        val isNewAlarm = currentState == 2 && lastAlarmState != 2
-                        val isPersistentAlarm = currentState == 2 && (currentTime - lastNotificationTime > 30000)
 
-                        if (isNewAlarm || isPersistentAlarm) {
-                            val prefix = if (isPersistentAlarm && !isNewAlarm) "⚠️ **REMINDER**: " else ""
-                            sendDiscordWebhook("${prefix}🚨 **URGENT: SEIZURE ALARM DETECTED!** 🚨\nOpenSeizureDetector has triggered an active emergency state.")
-                            lastNotificationTime = currentTime
+                        // Webhooks are only sent from MainActivity if the background service is disabled.
+                        // When background service is enabled, it handles the webhooks independently.
+                        if (!swBackground.isChecked) {
+                            val isNewAlarm = currentState == 2 && lastAlarmState != 2
+                            val isPersistentAlarm = currentState == 2 && (currentTime - lastNotificationTime > 30000)
+
+                            if (isNewAlarm || isPersistentAlarm) {
+                                val prefix = if (isPersistentAlarm && !isNewAlarm) "⚠️ **REMINDER**: " else ""
+                                sendDiscordWebhook("${prefix}🚨 **URGENT: SEIZURE ALARM DETECTED!** 🚨\nOpenSeizureDetector has triggered an active emergency state.")
+                                lastNotificationTime = currentTime
+                            }
                         }
 
                         lastAlarmState = currentState

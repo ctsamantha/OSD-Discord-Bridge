@@ -52,7 +52,7 @@ class MonitoringService : Service() {
 
         if (!isRunning) {
             isRunning = true
-            startForeground(1, createNotification("Monitoring OSD..."))
+            startForeground(1, createNotification("Connecting to OSD..."))
             handler.post(monitorRunnable)
         }
         return START_STICKY
@@ -64,7 +64,7 @@ class MonitoringService : Service() {
         val request = Request.Builder().url(osdUrl).build()
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                updateNotification("Error connecting to local OSD")
+                updateNotification("Status: OSD Not Found (Is it running?)")
             }
 
             override fun onResponse(call: Call, response: Response) {
@@ -82,9 +82,9 @@ class MonitoringService : Service() {
                             sendDiscordWebhook("${prefix}🚨 **URGENT: SEIZURE ALARM DETECTED!** 🚨\nOpenSeizureDetector has triggered an active emergency state.")
                             lastNotificationTime = currentTime
                         }
-                        
+
                         lastAlarmState = currentState
-                        
+
                         val stateString = when(currentState) {
                             1 -> "Warning State"
                             2 -> "ALARM TRIGGERED"
