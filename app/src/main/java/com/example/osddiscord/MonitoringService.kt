@@ -21,6 +21,7 @@ class MonitoringService : Service() {
     private val osdUrl = "http://127.0.0.1:8080/data"
     private val handler = Handler(Looper.getMainLooper())
     private var lastAlarmState = 0
+    private var lastNotificationTime = 0L
     private var isRunning = false
     private var savedWebhookUrls = listOf<String>()
 
@@ -28,7 +29,10 @@ class MonitoringService : Service() {
         override fun run() {
             if (!isRunning) return
             checkOsdState()
-            handler.postDelayed(this, 4000)
+
+            // Smart Polling: 1s if Warning/Alarm (1 or 2), 5s if OK (0)
+            val nextDelay = if (lastAlarmState > 0) 1000L else 5000L
+            handler.postDelayed(this, nextDelay)
         }
     }
 
@@ -41,6 +45,10 @@ class MonitoringService : Service() {
         val rawUrls = getSharedPreferences("OSD_Prefs", Context.MODE_PRIVATE)
             .getString("webhook_urls", "") ?: ""
         savedWebhookUrls = rawUrls.split("\n").filter { it.isNotBlank() }
+
+        // Reset state on service start to ensure first alarm is caught
+        lastAlarmState = 0
+        lastNotificationTime = 0L
 
         if (!isRunning) {
             isRunning = true
@@ -65,8 +73,14 @@ class MonitoringService : Service() {
                         val json = JSONObject(responseBody)
                         val currentState = json.optInt("alarmState", 0)
 
-                        if (currentState == 2 && lastAlarmState != 2) {
-                            sendDiscordWebhook()
+                        val currentTime = System.currentTimeMillis()
+                        val isNewAlarm = currentState == 2 && lastAlarmState != 2
+                        val isPersistentAlarm = currentState == 2 && (currentTime - lastNotificationTime > 30000)
+
+                        if (isNewAlarm || isPersistentAlarm) {
+                            val prefix = if (isPersistentAlarm && !isNewAlarm) "⚠️ **REMINDER**: " else ""
+                            sendDiscordWebhook("${prefix}🚨 **URGENT: SEIZURE ALARM DETECTED!** 🚨\nOpenSeizureDetector has triggered an active emergency state.")
+                            lastNotificationTime = currentTime
                         }
                         
                         lastAlarmState = currentState
@@ -85,9 +99,9 @@ class MonitoringService : Service() {
         })
     }
 
-    private fun sendDiscordWebhook() {
+    private fun sendDiscordWebhook(message: String) {
         val jsonPayload = JSONObject().apply {
-            put("content", "🚨 **URGENT: SEIZURE ALARM DETECTED!** 🚨\nOpenSeizureDetector has triggered an active emergency state.")
+            put("content", message)
             put("username", "OSD Emergency Bridge")
         }.toString()
 
@@ -100,6 +114,9 @@ class MonitoringService : Service() {
                     Log.e("OSD_Bridge", "Failed to send to $url", e)
                 }
                 override fun onResponse(call: Call, response: Response) {
+                    if (!response.isSuccessful) {
+                        Log.e("OSD_Bridge", "Error code ${response.code} from $url")
+                    }
                     response.close()
                 }
             })

@@ -36,6 +36,15 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Save Webhooks"
+        android:layout_marginBottom="8dp"/>
+
+    <Button
+        android:id="@+id/btnTestWebhooks"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Test Webhooks"
+        android:backgroundTint="#2196F3"
+        android:textColor="#FFFFFF"
         android:layout_marginBottom="16dp"/>
 
     <androidx.appcompat.widget.SwitchCompat

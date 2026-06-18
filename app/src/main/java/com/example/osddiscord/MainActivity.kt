@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
@@ -28,10 +29,12 @@ class MainActivity : AppCompatActivity() {
     private var isMonitoring = false
     private val handler = Handler(Looper.getMainLooper())
     private var lastAlarmState = 0
+    private var lastNotificationTime = 0L
     private var savedWebhookUrls = listOf<String>()
 
     private lateinit var etWebhookUrls: EditText
     private lateinit var btnSaveWebhooks: Button
+    private lateinit var btnTestWebhooks: Button
     private lateinit var tvStatus: TextView
     private lateinit var btnToggleMonitoring: Button
     private lateinit var swBackground: SwitchCompat
@@ -42,6 +45,7 @@ class MainActivity : AppCompatActivity() {
 
         etWebhookUrls = findViewById(R.id.etWebhookUrls)
         btnSaveWebhooks = findViewById(R.id.btnSaveWebhooks)
+        btnTestWebhooks = findViewById(R.id.btnTestWebhooks)
         tvStatus = findViewById(R.id.tvStatus)
         btnToggleMonitoring = findViewById(R.id.btnToggleMonitoring)
         swBackground = findViewById(R.id.swBackground)
@@ -51,6 +55,10 @@ class MainActivity : AppCompatActivity() {
         savedWebhookUrls = rawUrls.split("\n").filter { it.isNotBlank() }
         etWebhookUrls.setText(rawUrls)
         
+        // Initialize state to avoid missing first alarm if it's already active
+        lastAlarmState = 0
+        lastNotificationTime = 0L
+
         swBackground.isChecked = sharedPreferences.getBoolean("run_in_background", true)
 
         btnSaveWebhooks.setOnClickListener {
@@ -72,6 +80,15 @@ class MainActivity : AppCompatActivity() {
 
         swBackground.setOnCheckedChangeListener { _, isChecked ->
             sharedPreferences.edit().putBoolean("run_in_background", isChecked).apply()
+        }
+
+        btnTestWebhooks.setOnClickListener {
+            if (savedWebhookUrls.isEmpty()) {
+                Toast.makeText(this, "Save at least one Webhook URL first.", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            sendDiscordWebhook("🔔 **TEST MESSAGE**: This is a test notification from your OSD Discord Bridge.")
+            Toast.makeText(this, "Sending test message...", Toast.LENGTH_SHORT).show()
         }
 
         // Check if service is already running to set UI state
@@ -120,6 +137,9 @@ class MainActivity : AppCompatActivity() {
         updateUI(false)
         stopService(Intent(this, MonitoringService::class.java))
         handler.removeCallbacksAndMessages(null)
+        // Reset state so it's ready for a fresh start next time
+        lastAlarmState = 0
+        lastNotificationTime = 0L
     }
 
     private fun updateUI(active: Boolean) {
@@ -140,7 +160,10 @@ class MainActivity : AppCompatActivity() {
         override fun run() {
             if (!isMonitoring) return
             checkOsdState()
-            handler.postDelayed(this, 4000)
+            
+            // Smart Polling: 1s if Warning/Alarm (1 or 2), 5s if OK (0)
+            val nextDelay = if (lastAlarmState > 0) 1000L else 5000L
+            handler.postDelayed(this, nextDelay)
         }
     }
 
@@ -158,9 +181,16 @@ class MainActivity : AppCompatActivity() {
                     try {
                         val json = JSONObject(responseBody)
                         val currentState = json.optInt("alarmState", 0)
-                        if (currentState == 2 && lastAlarmState != 2) {
-                            sendDiscordWebhook()
+                        val currentTime = System.currentTimeMillis()
+                        val isNewAlarm = currentState == 2 && lastAlarmState != 2
+                        val isPersistentAlarm = currentState == 2 && (currentTime - lastNotificationTime > 30000)
+
+                        if (isNewAlarm || isPersistentAlarm) {
+                            val prefix = if (isPersistentAlarm && !isNewAlarm) "⚠️ **REMINDER**: " else ""
+                            sendDiscordWebhook("${prefix}🚨 **URGENT: SEIZURE ALARM DETECTED!** 🚨\nOpenSeizureDetector has triggered an active emergency state.")
+                            lastNotificationTime = currentTime
                         }
+
                         lastAlarmState = currentState
                         runOnUiThread {
                             if (isMonitoring) {
@@ -179,17 +209,24 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    private fun sendDiscordWebhook() {
+    private fun sendDiscordWebhook(message: String) {
         val jsonPayload = JSONObject().apply {
-            put("content", "🚨 **URGENT: SEIZURE ALARM DETECTED!** 🚨\nOpenSeizureDetector has triggered an active emergency state.")
+            put("content", message)
             put("username", "OSD Emergency Bridge")
         }.toString()
         val requestBody = jsonPayload.toRequestBody("application/json; charset=utf-8".toMediaType())
         savedWebhookUrls.forEach { url ->
             val request = Request.Builder().url(url).post(requestBody).build()
             client.newCall(request).enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {}
-                override fun onResponse(call: Call, response: Response) { response.close() }
+                override fun onFailure(call: Call, e: IOException) {
+                    Log.e("OSD_Bridge", "Failed to send to $url", e)
+                }
+                override fun onResponse(call: Call, response: Response) { 
+                    if (!response.isSuccessful) {
+                        Log.e("OSD_Bridge", "Error code ${response.code} from $url")
+                    }
+                    response.close() 
+                }
             })
         }
     }
